@@ -34,6 +34,7 @@ var FRAME_RATE = 100;
 var UPDATE_INTERVAL = Math.floor(1 / FRAME_RATE * 1000);
 var config; 
 var numConnections = 0;
+var frame = false;
 
 // =============================================================================
 // STATUS
@@ -80,6 +81,8 @@ function shutDown() {
 }
 
 function handleFrame() {
+    if (frame) { return; }
+    frame = true;
     client.write("FRAME\n");
 }
 
@@ -94,10 +97,16 @@ var client = net.connect({port: PORT, host: HOST},
 client.setEncoding("ascii");
 var dataBuf = "";
 client.on('data', function (data) {
-    dataBuf += data;
-    if (dataBuf.indexOf('\n') >= 0 ) {
+    frame = false;
+    dataBuf += data.replace(/(\r\n|\n|\r)/gm, "");
+    dataBuf = dataBuf.replace("}{\"STATUS\"", "}\n{\"STATUS\""); 
+    //console.log(dataBuf)
+    if (dataBuf.indexOf('\n',1) >= 0 ) {
+	var index = dataBuf.indexOf('\n',1);
+	var message = dataBuf.substr(0, index);
+	dataBuf = dataBuf.substr(index, dataBuf.length-index);
         try {
-            var dataObj   = JSON.parse(dataBuf);
+            var dataObj   = JSON.parse(message);
             var innerData = JSON.parse(dataObj.DATA);
             if (innerData.config) {
                 config = innerData;
@@ -111,12 +120,14 @@ client.on('data', function (data) {
                     io.emit("frame", innerData.frame);
                 }
             }
+            if (global && global.gc) {
+                global.gc();
+            }
         }
         catch (err) {
             console.log("Bad frame recieved", err);
-            console.log(data);
+            console.log(message);
         }
-        dataBuf = "";
     }
 });
 
@@ -134,7 +145,7 @@ process.on('uncaughtException', function (err) {
 // When the client side script connects a socket, call the function
 io.on('connection', function (socket) {
     socket.on("StartFrames", function () {
-	if (numConnections === 0) {
+	if (numConnections >= 0) {
             intervalToken = setInterval(handleFrame, UPDATE_INTERVAL);
         }
         numConnections++;
@@ -152,7 +163,7 @@ io.on('connection', function (socket) {
         console.log("Disconnected");
     });
     if (config) {
-        io.emit("config", config);
+        socket.emit("config", config);
     }
     else {
         client.write("CONFIG\n");
